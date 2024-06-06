@@ -6,5 +6,5 @@ A tool for generating documents such as
 
 This repository is provided as a Zig package for convenience. The canonical
 source lives in the zig compiler repository:
-* [doctest.zig](https://github.com/ziglang/zig/blob/master/tools/doctest.zig).
-* [docgen.zig](https://github.com/ziglang/zig/blob/master/tools/docgen.zig).
+* [doctest.zig](https://github.com/ziglang/zig/blob/master/tools/doctest.zig)
+* [docgen.zig](https://github.com/ziglang/zig/blob/master/tools/docgen.zig)
