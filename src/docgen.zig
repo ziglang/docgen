@@ -321,6 +321,7 @@ const Node = union(enum) {
     HeaderOpen: HeaderOpen,
     SeeAlso: []const SeeAlsoItem,
     Code: Code,
+    Embed: Code,
     Link: Link,
     InlineSyntax: Token,
     Shell: Token,
@@ -503,6 +504,16 @@ fn genToc(allocator: Allocator, tokenizer: *Tokenizer) !Toc {
                     _ = try eatToken(tokenizer, .bracket_close);
                     try nodes.append(.{
                         .Code = .{
+                            .name = tokenizer.buffer[name_tok.start..name_tok.end],
+                            .token = name_tok,
+                        },
+                    });
+                } else if (mem.eql(u8, tag_name, "embed")) {
+                    _ = try eatToken(tokenizer, .separator);
+                    const name_tok = try eatToken(tokenizer, .tag_content);
+                    _ = try eatToken(tokenizer, .bracket_close);
+                    try nodes.append(.{
+                        .Embed = .{
                             .name = tokenizer.buffer[name_tok.start..name_tok.end],
                             .token = name_tok,
                         },
@@ -1047,6 +1058,16 @@ fn genHtml(
                 const contents = code_dir.readFileAlloc(allocator, out_basename, std.math.maxInt(u32)) catch |err| {
                     return parseError(tokenizer, code.token, "unable to open '{s}': {s}", .{
                         out_basename, @errorName(err),
+                    });
+                };
+                defer allocator.free(contents);
+
+                try out.writeAll(contents);
+            },
+            .Embed => |embed| {
+                const contents = code_dir.readFileAlloc(allocator, embed.name, std.math.maxInt(u32)) catch |err| {
+                    return parseError(tokenizer, embed.token, "unable to open '{s}': {s}", .{
+                        embed.name, @errorName(err),
                     });
                 };
                 defer allocator.free(contents);
