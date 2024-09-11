@@ -117,6 +117,91 @@ fn printOutput(
     const code_name = std.fs.path.stem(input_path);
 
     switch (code.id) {
+        .syntax => return,
+        .build => |expected_outcome| code_block: {
+            var build_args = std.ArrayList([]const u8).init(arena);
+            defer build_args.deinit();
+            try build_args.appendSlice(&[_][]const u8{
+                zig_exe,        "build",
+                "--color",      "on",
+                "--build-file", input_path,
+            });
+            if (opt_zig_lib_dir) |zig_lib_dir| {
+                try build_args.appendSlice(&.{ "--zig-lib-dir", zig_lib_dir });
+            }
+
+            try shell_out.print("$ zig build", .{});
+
+            switch (code.mode) {
+                .Debug => {},
+                else => {
+                    try build_args.appendSlice(&[_][]const u8{ "-O", @tagName(code.mode) });
+                    try shell_out.print("-O {s} ", .{@tagName(code.mode)});
+                },
+            }
+            for (code.link_objects) |link_object| {
+                const name_with_ext = try std.fmt.allocPrint(arena, "{s}{s}", .{ link_object, obj_ext });
+                try build_args.append(name_with_ext);
+                try shell_out.print("{s} ", .{name_with_ext});
+            }
+            if (code.link_libc) {
+                try build_args.append("-lc");
+                try shell_out.print("-lc ", .{});
+            }
+
+            if (code.target_str) |triple| {
+                try build_args.appendSlice(&[_][]const u8{ "-target", triple });
+                try shell_out.print("-target {s} ", .{triple});
+            }
+            if (code.verbose_cimport) {
+                try build_args.append("--verbose-cimport");
+                try shell_out.print("--verbose-cimport ", .{});
+            }
+            for (code.additional_options) |option| {
+                try build_args.append(option);
+                try shell_out.print("{s} ", .{option});
+            }
+
+            try shell_out.print("\n", .{});
+
+            if (expected_outcome == .fail or
+                expected_outcome == .build_fail)
+            {
+                const result = try process.Child.run(.{
+                    .allocator = arena,
+                    .argv = build_args.items,
+                    .cwd = tmp_dir_path,
+                    .env_map = &env_map,
+                    .max_output_bytes = max_doc_file_size,
+                });
+                switch (result.term) {
+                    .Exited => |exit_code| {
+                        if (exit_code == 0) {
+                            print("{s}\nThe following command incorrectly succeeded:\n", .{result.stderr});
+                            dumpArgs(build_args.items);
+                            fatal("example incorrectly compiled", .{});
+                        }
+                    },
+                    else => {
+                        print("{s}\nThe following command crashed:\n", .{result.stderr});
+                        dumpArgs(build_args.items);
+                        fatal("example compile crashed", .{});
+                    },
+                }
+                const escaped_stderr = try escapeHtml(arena, result.stderr);
+                const colored_stderr = try termColor(arena, escaped_stderr);
+                try shell_out.writeAll(colored_stderr);
+                break :code_block;
+            }
+
+            const result = run(arena, &env_map, null, build_args.items) catch
+                fatal("build test failed", .{});
+            const escaped_stderr = try escapeHtml(arena, result.stderr);
+            const colored_stderr = try termColor(arena, escaped_stderr);
+            const escaped_stdout = try escapeHtml(arena, result.stdout);
+            const colored_stdout = try termColor(arena, escaped_stdout);
+            try shell_out.print("\n{s}{s}\n", .{ colored_stderr, colored_stdout });
+        },
         .exe => |expected_outcome| code_block: {
             var build_args = std.ArrayList([]const u8).init(arena);
             defer build_args.deinit();
@@ -823,6 +908,8 @@ const Code = struct {
         exe: ExpectedOutcome,
         obj: ?[]const u8,
         lib,
+        build: ExpectedOutcome,
+        syntax,
     };
 
     const ExpectedOutcome = enum {
@@ -847,7 +934,7 @@ fn parseManifest(arena: Allocator, source_bytes: []const u8) !Code {
     var just_check_syntax = false;
     const id: Code.Id = if (mem.eql(u8, first_line, "syntax")) blk: {
         just_check_syntax = true;
-        break :blk .{ .obj = null };
+        break :blk .syntax;
     } else if (mem.eql(u8, first_line, "test"))
         .@"test"
     else if (mem.eql(u8, first_line, "lib"))
@@ -863,6 +950,9 @@ fn parseManifest(arena: Allocator, source_bytes: []const u8) !Code {
             fatal("bad exe expected outcome in line '{s}'", .{first_line}) }
     else if (mem.startsWith(u8, first_line, "obj="))
         .{ .obj = first_line["obj=".len..] }
+    else if (mem.startsWith(u8, first_line, "build"))
+        .{ .build = std.meta.stringToEnum(Code.ExpectedOutcome, first_line["build=".len..]) orelse
+            fatal("bad build expected outcome in line '{s}'", .{first_line}) }
     else
         fatal("unrecognized manifest id: '{s}'", .{first_line});
 
@@ -975,7 +1065,10 @@ fn termColor(allocator: Allocator, input: []const u8) ![]u8 {
         arg,
         arg_number,
         expect_end,
+        gzd4,
     } = .start;
+
+    var charset: enum { ascii, vt100_line_drawing } = .ascii;
     var last_new_line: usize = 0;
     var open_span_count: usize = 0;
     while (i < input.len) : (i += 1) {
@@ -987,11 +1080,40 @@ fn termColor(allocator: Allocator, input: []const u8) ![]u8 {
                     try out.writeByte(c);
                     last_new_line = buf.items.len;
                 },
-                else => try out.writeByte(c),
+                else => switch (charset) {
+                    .ascii => try out.writeAll(switch (c) {
+                        '<' => "&lt;",
+                        '>' => "&gt;",
+                        else => &.{c},
+                    }),
+                    .vt100_line_drawing => try out.writeAll(switch (c) {
+                        'j' => "┘",
+                        'k' => "┐",
+                        'l' => "┌",
+                        'm' => "└",
+                        'n' => "┼",
+                        'q' => "─",
+                        't' => "├",
+                        'u' => "┤",
+                        'v' => "┴",
+                        'w' => "┬",
+                        'x' => "│",
+                        else => "�",
+                    }),
+                },
             },
             .escape => switch (c) {
                 '[' => state = .lbracket,
+                '(' => state = .gzd4,
                 else => return error.UnsupportedEscape,
+            },
+            .gzd4 => {
+                switch (c) {
+                    'B' => charset = .ascii,
+                    '0' => charset = .vt100_line_drawing,
+                    else => return error.UnsupportedEscape,
+                }
+                state = .start;
             },
             .lbracket => switch (c) {
                 '0'...'9' => {
