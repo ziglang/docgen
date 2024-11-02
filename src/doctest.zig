@@ -130,7 +130,7 @@ fn printOutput(
                 try build_args.appendSlice(&.{ "--zig-lib-dir", zig_lib_dir });
             }
 
-            try shell_out.print("$ zig build", .{});
+            try shell_out.print("$ zig build ", .{});
 
             switch (code.mode) {
                 .Debug => {},
