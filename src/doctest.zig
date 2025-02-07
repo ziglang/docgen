@@ -244,7 +244,7 @@ fn printOutput(
             }
             for (code.additional_options) |option| {
                 try build_args.append(option);
-                try shell_out.print("{s} ", .{option});
+                try shell_out.print(" {s}", .{option});
             }
 
             try shell_out.print("\n", .{});
