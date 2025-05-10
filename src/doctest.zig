@@ -130,7 +130,7 @@ fn printOutput(
                 try build_args.appendSlice(&.{ "--zig-lib-dir", zig_lib_dir });
             }
 
-            try shell_out.print("$ zig build", .{});
+            try shell_out.print("$ zig build ", .{});
 
             switch (code.mode) {
                 .Debug => {},
@@ -288,7 +288,7 @@ fn printOutput(
                 if (mem.startsWith(u8, triple, "wasm32") or
                     mem.startsWith(u8, triple, "riscv64-linux") or
                     (mem.startsWith(u8, triple, "x86_64-linux") and
-                    builtin.os.tag != .linux or builtin.cpu.arch != .x86_64))
+                        builtin.os.tag != .linux or builtin.cpu.arch != .x86_64))
                 {
                     // skip execution
                     break :code_block;
