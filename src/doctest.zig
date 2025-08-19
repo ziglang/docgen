@@ -1,6 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const fatal = std.zig.fatal;
+const fatal = std.process.fatal;
 const mem = std.mem;
 const fs = std.fs;
 const process = std.process;
@@ -44,7 +44,7 @@ pub fn main() !void {
     while (args_it.next()) |arg| {
         if (mem.startsWith(u8, arg, "-")) {
             if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
-                try std.io.getStdOut().writeAll(usage);
+                try std.fs.File.stdout().writeAll(usage);
                 process.exit(0);
             } else if (mem.eql(u8, arg, "-i")) {
                 opt_input = args_it.next() orelse fatal("expected parameter after -i", .{});
@@ -84,14 +84,15 @@ pub fn main() !void {
 
     var out_file = try fs.cwd().createFile(output_path, .{});
     defer out_file.close();
+    var out_file_buffer: [4096]u8 = undefined;
+    var out_file_writer = out_file.writer(&out_file_buffer);
 
-    var bw = std.io.bufferedWriter(out_file.writer());
-    const out = bw.writer();
+    const out = &out_file_writer.interface;
 
     try printSourceBlock(arena, out, source, fs.path.basename(input_path));
     try printOutput(arena, out, code, input_path, zig_path, opt_zig_lib_dir, tmp_dir_path);
 
-    try bw.flush();
+    try out_file_writer.end();
 }
 
 fn printOutput(
@@ -110,7 +111,7 @@ fn printOutput(
     const obj_ext = builtin.object_format.fileExt(builtin.cpu.arch);
     const print = std.debug.print;
 
-    var shell_buffer = std.ArrayList(u8).init(arena);
+    var shell_buffer = std.array_list.Managed(u8).init(arena);
     defer shell_buffer.deinit();
     var shell_out = shell_buffer.writer();
 
@@ -119,7 +120,7 @@ fn printOutput(
     switch (code.id) {
         .syntax => return,
         .build => |expected_outcome| code_block: {
-            var build_args = std.ArrayList([]const u8).init(arena);
+            var build_args = std.array_list.Managed([]const u8).init(arena);
             defer build_args.deinit();
             try build_args.appendSlice(&[_][]const u8{
                 zig_exe,        "build",
@@ -203,7 +204,7 @@ fn printOutput(
             try shell_out.print("\n{s}{s}\n", .{ colored_stderr, colored_stdout });
         },
         .exe => |expected_outcome| code_block: {
-            var build_args = std.ArrayList([]const u8).init(arena);
+            var build_args = std.array_list.Managed([]const u8).init(arena);
             defer build_args.deinit();
             try build_args.appendSlice(&[_][]const u8{
                 zig_exe,    "build-exe",
@@ -345,7 +346,7 @@ fn printOutput(
             try shell_out.writeAll("\n");
         },
         .@"test" => {
-            var test_args = std.ArrayList([]const u8).init(arena);
+            var test_args = std.array_list.Managed([]const u8).init(arena);
             defer test_args.deinit();
 
             try test_args.appendSlice(&[_][]const u8{
@@ -379,7 +380,7 @@ fn printOutput(
                 const target = try std.zig.system.resolveTargetQuery(
                     target_query,
                 );
-                switch (getExternalExecutor(host, &target, .{
+                switch (getExternalExecutor(&host, &target, .{
                     .link_libc = code.link_libc,
                 })) {
                     .native => {},
@@ -396,7 +397,7 @@ fn printOutput(
             try shell_out.print("\n{s}{s}\n", .{ escaped_stderr, escaped_stdout });
         },
         .test_error => |error_match| {
-            var test_args = std.ArrayList([]const u8).init(arena);
+            var test_args = std.array_list.Managed([]const u8).init(arena);
             defer test_args.deinit();
 
             try test_args.appendSlice(&[_][]const u8{
@@ -449,7 +450,7 @@ fn printOutput(
             try shell_out.print("\n{s}\n", .{colored_stderr});
         },
         .test_safety => |error_match| {
-            var test_args = std.ArrayList([]const u8).init(arena);
+            var test_args = std.array_list.Managed([]const u8).init(arena);
             defer test_args.deinit();
 
             try test_args.appendSlice(&[_][]const u8{
@@ -510,7 +511,7 @@ fn printOutput(
         },
         .obj => |maybe_error_match| {
             const name_plus_obj_ext = try std.fmt.allocPrint(arena, "{s}{s}", .{ code_name, obj_ext });
-            var build_args = std.ArrayList([]const u8).init(arena);
+            var build_args = std.array_list.Managed([]const u8).init(arena);
             defer build_args.deinit();
 
             try build_args.appendSlice(&[_][]const u8{
@@ -581,11 +582,11 @@ fn printOutput(
         .lib => {
             const bin_basename = try std.zig.binNameAlloc(arena, .{
                 .root_name = code_name,
-                .target = builtin.target,
+                .target = &builtin.target,
                 .output_mode = .Lib,
             });
 
-            var test_args = std.ArrayList([]const u8).init(arena);
+            var test_args = std.array_list.Managed([]const u8).init(arena);
             defer test_args.deinit();
 
             try test_args.appendSlice(&[_][]const u8{
@@ -690,8 +691,6 @@ fn tokenizeAndPrint(arena: Allocator, out: anytype, raw_src: []const u8) !void {
             .keyword_align,
             .keyword_and,
             .keyword_asm,
-            .keyword_async,
-            .keyword_await,
             .keyword_break,
             .keyword_catch,
             .keyword_comptime,
@@ -728,7 +727,6 @@ fn tokenizeAndPrint(arena: Allocator, out: anytype, raw_src: []const u8) !void {
             .keyword_try,
             .keyword_union,
             .keyword_unreachable,
-            .keyword_usingnamespace,
             .keyword_var,
             .keyword_volatile,
             .keyword_allowzero,
@@ -1012,7 +1010,7 @@ fn skipPrefix(line: []const u8) []const u8 {
 }
 
 fn escapeHtml(allocator: Allocator, input: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     defer buf.deinit();
 
     const out = buf.writer();
@@ -1048,7 +1046,7 @@ fn termColor(allocator: Allocator, input: []const u8) ![]u8 {
     const supported_sgr_colors = [_]u8{ 31, 32, 36 };
     const supported_sgr_numbers = [_]u8{ 0, 1, 2 };
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     defer buf.deinit();
 
     var out = buf.writer();
@@ -1470,7 +1468,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1487,7 +1485,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1501,7 +1499,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1520,7 +1518,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1541,7 +1539,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1560,7 +1558,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1583,7 +1581,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1605,7 +1603,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1622,7 +1620,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1641,7 +1639,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);
@@ -1656,7 +1654,7 @@ test printShell {
             \\</samp></pre></figure>
         ;
 
-        var buffer = std.ArrayList(u8).init(test_allocator);
+        var buffer = std.array_list.Managed(u8).init(test_allocator);
         defer buffer.deinit();
 
         try printShell(buffer.writer(), shell_out, false);

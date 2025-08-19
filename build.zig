@@ -6,31 +6,39 @@ pub fn build(b: *std.Build) void {
 
     const doctest_exe = b.addExecutable(.{
         .name = "doctest",
-        .root_source_file = b.path("src/doctest.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/doctest.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const docgen_exe = b.addExecutable(.{
         .name = "docgen",
-        .root_source_file = b.path("src/docgen.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docgen.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     b.installArtifact(doctest_exe);
     b.installArtifact(docgen_exe);
 
     const doctest_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/doctest.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/doctest.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const docgen_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/docgen.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docgen.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const run_doctest_unit_tests = b.addRunArtifact(doctest_unit_tests);

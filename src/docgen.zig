@@ -10,7 +10,7 @@ const mem = std.mem;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const getExternalExecutor = std.zig.system.getExternalExecutor;
-const fatal = std.zig.fatal;
+const fatal = std.process.fatal;
 
 const max_doc_file_size = 10 * 1024 * 1024;
 
@@ -43,8 +43,7 @@ pub fn main() !void {
     while (args_it.next()) |arg| {
         if (mem.startsWith(u8, arg, "-")) {
             if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
-                const stdout = io.getStdOut().writer();
-                try stdout.writeAll(usage);
+                try std.fs.File.stdout().writeAll(usage);
                 process.exit(0);
             } else if (mem.eql(u8, arg, "--code-dir")) {
                 if (args_it.next()) |param| {
@@ -69,22 +68,23 @@ pub fn main() !void {
 
     var in_file = try fs.cwd().openFile(input_path, .{});
     defer in_file.close();
+    var in_file_reader = in_file.reader(&.{});
 
     var out_file = try fs.cwd().createFile(output_path, .{});
     defer out_file.close();
+    var out_file_buffer: [4096]u8 = undefined;
+    var out_file_writer = out_file.writer(&out_file_buffer);
 
     var code_dir = try fs.cwd().openDir(code_dir_path, .{});
     defer code_dir.close();
 
-    const input_file_bytes = try in_file.reader().readAllAlloc(arena, max_doc_file_size);
-
-    var buffered_writer = io.bufferedWriter(out_file.writer());
+    const input_file_bytes = try in_file_reader.interface.allocRemaining(arena, .limited(max_doc_file_size));
 
     var tokenizer = Tokenizer.init(input_path, input_file_bytes);
     var toc = try genToc(arena, &tokenizer);
 
-    try genHtml(arena, &tokenizer, &toc, code_dir, buffered_writer.writer());
-    try buffered_writer.flush();
+    try genHtml(arena, &tokenizer, &toc, code_dir, &out_file_writer.interface);
+    try out_file_writer.end();
 }
 
 const Token = struct {
@@ -347,12 +347,12 @@ fn genToc(allocator: Allocator, tokenizer: *Tokenizer) !Toc {
     var last_action: Action = .open;
     var last_columns: ?u8 = null;
 
-    var toc_buf = std.ArrayList(u8).init(allocator);
+    var toc_buf = std.array_list.Managed(u8).init(allocator);
     defer toc_buf.deinit();
 
     var toc = toc_buf.writer();
 
-    var nodes = std.ArrayList(Node).init(allocator);
+    var nodes = std.array_list.Managed(Node).init(allocator);
     defer nodes.deinit();
 
     try toc.writeByte('\n');
@@ -452,7 +452,7 @@ fn genToc(allocator: Allocator, tokenizer: *Tokenizer) !Toc {
                         last_action = .close;
                     }
                 } else if (mem.eql(u8, tag_name, "see_also")) {
-                    var list = std.ArrayList(SeeAlsoItem).init(allocator);
+                    var list = std.array_list.Managed(SeeAlsoItem).init(allocator);
                     errdefer list.deinit();
 
                     while (true) {
@@ -612,7 +612,7 @@ fn genToc(allocator: Allocator, tokenizer: *Tokenizer) !Toc {
 }
 
 fn urlize(allocator: Allocator, input: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     defer buf.deinit();
 
     const out = buf.writer();
@@ -631,7 +631,7 @@ fn urlize(allocator: Allocator, input: []const u8) ![]u8 {
 }
 
 fn escapeHtml(allocator: Allocator, input: []const u8) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     defer buf.deinit();
 
     const out = buf.writer();
@@ -721,8 +721,6 @@ fn tokenizeAndPrintRaw(
             .keyword_align,
             .keyword_and,
             .keyword_asm,
-            .keyword_async,
-            .keyword_await,
             .keyword_break,
             .keyword_catch,
             .keyword_comptime,
@@ -759,7 +757,6 @@ fn tokenizeAndPrintRaw(
             .keyword_try,
             .keyword_union,
             .keyword_unreachable,
-            .keyword_usingnamespace,
             .keyword_var,
             .keyword_volatile,
             .keyword_allowzero,
